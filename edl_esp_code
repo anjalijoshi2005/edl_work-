@@ -1,0 +1,49 @@
+#include <WiFi.h>
+#include <WebServer.h>
+
+const char* ssid = "SmokeDetector";
+const char* password = "12345678";
+
+WebServer server(80);
+String stm_message = "No data yet";
+void handleRoot()
+{
+  // server.send(200, "text/plain", "ESP32 connected successfully!"); //test message from esp->phone
+  String page = "<h1>STM32 Message</h1>";
+  page += "<h2>" + stm_message + "</h2>";
+  page += "<br><a href='/buzzer_off'><button>TURN BUZZER OFF</button></a>";
+
+  server.send(200, "text/html", page);
+}
+
+void buzzerOff()
+{
+  Serial.println("Phone requested buzzer OFF");
+  server.send(200, "text/plain", "Buzzer OFF command sent to STM32");
+}
+
+void setup()
+{
+  Serial.begin(115200);
+  Serial2.begin(115200, SERIAL_8N1, 16, 17);
+  WiFi.softAP(ssid, password);   // create WiFi network
+
+  Serial.println("WiFi started");
+  Serial.println(WiFi.softAPIP());
+
+  server.on("/", handleRoot);
+  server.on("/buzzer_off", buzzerOff);
+  
+  server.begin();
+}
+
+void loop()
+{
+  server.handleClient();
+  if (Serial2.available())
+  {
+    stm_message = Serial2.readStringUntil('\n');
+    Serial.println( stm_message);
+  }
+
+}
