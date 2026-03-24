@@ -1,0 +1,251 @@
+#include "main.h"
+#include <stdio.h>
+#include <string.h>
+
+extern ADC_HandleTypeDef hadc1;
+extern UART_HandleTypeDef huart2;
+
+#define NUM_BINS 5
+#define ADC_MAX 4095.0f
+#define VREF 3.3f
+
+float I_lambda1, I_lambda2, I_forward, I_side;
+float baseline_lambda1 = 0;
+float baseline_lambda2 = 0;
+float baseline_forward = 0;
+float baseline_side = 0;
+
+float R_lambda, R_theta, d;
+
+uint32_t particle_bins[NUM_BINS] = {0};
+float bin_limits[NUM_BINS+1] = {0,100,200,400,600,1000};
+
+char msg[150];
+
+float prev_lambda1 = 0;
+float prev_lambda2 = 0;
+float prev_forward = 0;
+float prev_side = 0;
+
+float read_ADC(uint32_t channel)
+{
+    ADC_ChannelConfTypeDef sConfig = {0};
+
+    sConfig.Channel = channel;
+    sConfig.Rank = ADC_REGULAR_RANK_1;
+    sConfig.SamplingTime = ADC_SAMPLETIME_71CYCLES_5;
+
+    HAL_ADC_ConfigChannel(&hadc1, &sConfig);
+
+    HAL_ADC_Start(&hadc1);
+    HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+
+    return HAL_ADC_GetValue(&hadc1);
+}
+
+float adc_to_voltage(float adc)
+{
+    return (adc * VREF) / ADC_MAX;
+}
+
+float filter_signal(float old_val, float new_val)
+{
+    return 0.8f * old_val + 0.2f * new_val;
+}
+
+void calculate_baseline()
+{
+    float sum1=0,sum2=0,sum3=0,sum4=0;
+
+    for(int i=0;i<100;i++)
+    {
+        sum1 += read_ADC(ADC_CHANNEL_3);
+        sum2 += read_ADC(ADC_CHANNEL_4);
+        sum3 += read_ADC(ADC_CHANNEL_5);
+        sum4 += read_ADC(ADC_CHANNEL_6);
+
+        HAL_Delay(10);
+    }
+
+    baseline_lambda1 = sum1/100;
+    baseline_lambda2 = sum2/100;
+    baseline_forward = sum3/100;
+    baseline_side = sum4/100;
+}
+
+void update_PSD(float d)
+{
+    for(int i=0;i<NUM_BINS;i++)
+    {
+        if(d >= bin_limits[i] && d < bin_limits[i+1])
+        {
+            particle_bins[i]++;
+            break;
+        }
+    }
+}
+
+void calculate_particle_size()
+{
+    I_lambda1 = adc_to_voltage(read_ADC(ADC_CHANNEL_3));
+    I_lambda2 = adc_to_voltage(read_ADC(ADC_CHANNEL_4));
+    I_forward = adc_to_voltage(read_ADC(ADC_CHANNEL_5));
+    I_side    = adc_to_voltage(read_ADC(ADC_CHANNEL_6));
+
+    I_lambda1 -= adc_to_voltage(baseline_lambda1);
+    I_lambda2 -= adc_to_voltage(baseline_lambda2);
+    I_forward -= adc_to_voltage(baseline_forward);
+    I_side    -= adc_to_voltage(baseline_side);
+
+    I_lambda1 = filter_signal(prev_lambda1, I_lambda1);
+    I_lambda2 = filter_signal(prev_lambda2, I_lambda2);
+    I_forward = filter_signal(prev_forward, I_forward);
+    I_side    = filter_signal(prev_side, I_side);
+
+    prev_lambda1 = I_lambda1;
+    prev_lambda2 = I_lambda2;
+    prev_forward = I_forward;
+    prev_side    = I_side;
+
+    if(I_lambda2 <= 0.01f) I_lambda2 = 0.01f;
+    if(I_side <= 0.01f) I_side = 0.01f;
+
+    R_lambda = I_lambda1 / I_lambda2;
+    R_theta  = I_forward / I_side;
+
+    // 2D polynomial regression bins
+
+    if(R_lambda < 1.2)
+    {
+        if(R_theta < 2.0)
+        {
+            d = 50
+              + 60*R_lambda
+              + 25*R_theta
+              - 10*(R_lambda*R_lambda)
+              + 4*(R_theta*R_theta)
+              + 8*(R_lambda*R_theta);
+        }
+        else
+        {
+            d = 90
+              + 45*R_lambda
+              + 28*R_theta
+              - 8*(R_lambda*R_lambda)
+              + 5*(R_theta*R_theta)
+              + 6*(R_lambda*R_theta);
+        }
+    }
+    else if(R_lambda < 1.5)
+    {
+        if(R_theta < 3.5)
+        {
+            d = 160
+              + 55*R_lambda
+              + 22*R_theta
+              - 12*(R_lambda*R_lambda)
+              + 3*(R_theta*R_theta)
+              + 7*(R_lambda*R_theta);
+        }
+        else
+        {
+            d = 240
+              + 35*R_lambda
+              + 18*R_theta
+              - 10*(R_lambda*R_lambda)
+              + 2*(R_theta*R_theta)
+              + 5*(R_lambda*R_theta);
+        }
+    }
+    else
+    {
+        if(R_theta < 5.0)
+        {
+            d = 320
+              + 28*R_lambda
+              + 15*R_theta
+              - 8*(R_lambda*R_lambda)
+              + 2*(R_theta*R_theta)
+              + 4*(R_lambda*R_theta);
+        }
+        else
+        {
+            d = 420
+              + 20*R_lambda
+              + 12*R_theta
+              - 6*(R_lambda*R_lambda)
+              + 1*(R_theta*R_theta)
+              + 3*(R_lambda*R_theta);
+        }
+    }
+
+    if(d < 0) d = 0;
+    if(d > 1000) d = 1000;
+
+    update_PSD(d);
+
+    if(d > 300)
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+    else
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+
+    sprintf(msg,
+    "%.2f,%.2f,%.2f,%lu,%lu,%lu,%lu,%lu\r\n",
+    R_lambda,
+    R_theta,
+    d,
+    particle_bins[0],
+    particle_bins[1],
+    particle_bins[2],
+    particle_bins[3],
+    particle_bins[4]);
+
+    HAL_UART_Transmit(&huart2,(uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+}
+
+
+int main(void)
+{
+    HAL_Init();
+    SystemClock_Config();
+
+    MX_GPIO_Init();
+    MX_ADC1_Init();
+    MX_USART2_UART_Init();
+
+    calculate_baseline();
+
+    while(1)
+    {
+        calculate_particle_size();
+        HAL_Delay(200);
+    }
+}
+
+import serial
+import matplotlib.pyplot as plt
+
+ser = serial.Serial('COM3',115200)
+
+bins = ['0-100','100-200','200-400','400-600','600-1000']
+
+plt.ion()
+
+while True:
+    line = ser.readline().decode().strip()
+    data = line.split(',')
+
+    if len(data)==8:
+        R_lambda = float(data[0])
+        R_theta = float(data[1])
+        d = float(data[2])
+        counts = list(map(int,data[3:]))
+
+        plt.clf()
+        plt.bar(bins, counts)
+
+        plt.xlabel("Particle Diameter (nm)")
+        plt.ylabel("Count")
+        plt.title(f"d={d:.2f} nm | Rλ={R_lambda:.2f} | Rθ={R_theta:.2f}")
+
+        plt.pause(0.1)
