@@ -1,0 +1,206 @@
+#include "main.h"
+#include <stdio.h>
+#include <string.h>
+
+extern ADC_HandleTypeDef hadc1;
+extern UART_HandleTypeDef huart2;
+
+#define NUM_BINS 5
+#define ADC_MAX 4095.0f
+#define VREF 3.3f
+
+// -------- SIGNALS --------
+float I_lambda1_b90, I_lambda2_ir90, I_forward_b90, I_side_b120;
+
+// -------- RATIOS --------
+float R_lambda, R_theta, d;
+
+// -------- PSD --------
+uint32_t particle_bins[NUM_BINS] = {0};
+float bin_limits[NUM_BINS+1] = {0,100,200,400,600,1000};
+
+char msg[150];
+
+// -------- FILTER STORAGE --------
+float prev_lambda1 = 0;
+float prev_lambda2 = 0;
+float prev_forward = 0;
+float prev_side = 0;
+
+
+// ================= ADC → VOLTAGE =================
+float adc_to_voltage(uint16_t adc)
+{
+    return (adc * VREF) / ADC_MAX;
+}
+
+
+// ================= FILTER =================
+float filter_signal(float old_val, float new_val)
+{
+    return 0.8f * old_val + 0.2f * new_val;
+}
+
+
+// ================= PSD =================
+void update_PSD(float d)
+{
+    for(int i=0;i<NUM_BINS;i++)
+    {
+        if(d >= bin_limits[i] && d < bin_limits[i+1])
+        {
+            particle_bins[i]++;
+            break;
+        }
+    }
+}
+
+
+// ================= MAIN PARTICLE FUNCTION =================
+void calculate_particle_size()
+{
+
+    uint16_t pa6_val = adc_val[2];  // PA6
+    uint16_t pa7_val = adc_val[3];  // PA7
+
+
+    // ================= 2-LOOP SYSTEM =================
+    static uint8_t loop_state = 0;
+
+    static float pa6_blue = 0, pa6_ir = 0;
+    static float pa7_blue = 0, pa7_ir = 0;
+
+    pa6_blue_90=adc_to_voltage(blue_avg_1);
+    pa7_blue_120=adc_to_voltage(blue_avg_2);
+    pa6_ir_90=adc_to_volatge(ir_avg_1);
+    pa7_ir_120=adc_to_voltage(ir_avg_2);
+    // ================= ASSIGN =================
+    I_lambda1_b90 = pa6_blue_90;
+    I_lambda2_ir90 = pa6_ir_90;
+
+    I_forward_b90 = pa6_blue_90;
+    I_side_b120    = pa7_blue_120;
+
+
+    // ================= FILTER =================
+    I_lambda1_b90 = filter_signal(prev_lambda1, I_lambda1_b90);
+    I_lambda2_ir90 = filter_signal(prev_lambda2, I_lambda2_ir90);
+    I_forward_b90 = filter_signal(prev_forward, I_forward_b90);
+    I_side_b120    = filter_signal(prev_side, I_side_b120);
+
+    prev_lambda1 = I_lambda1_b90;
+    prev_lambda2 = I_lambda2_ir90;
+    prev_forward = I_forward_b90;
+    prev_side    = I_side_b120;
+
+
+    // ================= SAFETY =================
+    if(I_lambda2_ir90 <= 0.01f) I_lambda2_ir90 = 0.01f;
+    if(I_side_b120 <= 0.01f) I_side_b120 = 0.01f;
+
+
+    // ================= RATIOS =================
+    R_lambda = I_lambda1_b90 / I_lambda2_ir90;
+    R_theta  = I_forward_b90 / I_side_b120;
+
+
+    // ================= REGRESSION =================
+    if(R_lambda < 1.2)
+    {
+        if(R_theta < 2.0)
+        {
+            d = 50 + 60*R_lambda + 25*R_theta
+              - 10*(R_lambda*R_lambda)
+              + 4*(R_theta*R_theta)
+              + 8*(R_lambda*R_theta);
+        }
+        else
+        {
+            d = 90 + 45*R_lambda + 28*R_theta
+              - 8*(R_lambda*R_lambda)
+              + 5*(R_theta*R_theta)
+              + 6*(R_lambda*R_theta);
+        }
+    }
+    else if(R_lambda < 1.5)
+    {
+        if(R_theta < 3.5)
+        {
+            d = 160 + 55*R_lambda + 22*R_theta
+              - 12*(R_lambda*R_lambda)
+              + 3*(R_theta*R_theta)
+              + 7*(R_lambda*R_theta);
+        }
+        else
+        {
+            d = 240 + 35*R_lambda + 18*R_theta
+              - 10*(R_lambda*R_lambda)
+              + 2*(R_theta*R_theta)
+              + 5*(R_lambda*R_theta);
+        }
+    }
+    else
+    {
+        if(R_theta < 5.0)
+        {
+            d = 320 + 28*R_lambda + 15*R_theta
+              - 8*(R_lambda*R_lambda)
+              + 2*(R_theta*R_theta)
+              + 4*(R_lambda*R_theta);
+        }
+        else
+        {
+            d = 420 + 20*R_lambda + 12*R_theta
+              - 6*(R_lambda*R_lambda)
+              + 1*(R_theta*R_theta)
+              + 3*(R_lambda*R_theta);
+        }
+    }
+
+    if(d < 0) d = 0;
+    if(d > 1000) d = 1000;
+
+
+    // ================= PSD =================
+    update_PSD(d);
+
+
+    // ================= LED =================
+   // if(d > 300)
+     //   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+    //else
+      //  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+
+
+    // ================= UART =================
+    sprintf(msg,
+    "%.2f,%.2f,%.2f,%lu,%lu,%lu,%lu,%lu\r\n",
+    R_lambda,
+    R_theta,
+    d,
+    particle_bins[0],
+    particle_bins[1],
+    particle_bins[2],
+    particle_bins[3],
+    particle_bins[4]);
+
+    HAL_UART_Transmit(&huart2,(uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+}
+
+
+// ================= MAIN =================
+int main(void)
+{
+    //HAL_Init();
+    //SystemClock_Config();
+
+    //MX_GPIO_Init();
+    //MX_ADC1_Init();
+    //MX_USART2_UART_Init();
+
+    while(1)
+    {
+        calculate_particle_size();
+        HAL_Delay(200);
+    }
+}
