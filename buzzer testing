@@ -1,0 +1,93 @@
+     if (HAL_UART_Receive(&huart1, &rx_char, 1, 10) == HAL_OK)
+	          {
+	              if (rx_char == '\r') continue;
+
+	              if (rx_char == '\n')
+	              {
+	                  rx_buffer[rx_index] = '\0';
+
+	                  if (strcmp(rx_buffer, "OFF") == 0)
+	                  {
+	                      force_off = 1;
+	                  }
+
+	                  rx_index = 0;
+	              }
+	              else
+	              {
+	                  if (rx_index < 9)
+	                      rx_buffer[rx_index++] = rx_char;
+	              }
+	          }
+	          // ================= RANDOM VALUE =================
+	             value = (rand() % 1000) + 1;
+
+	             // ================= MOVING AVERAGE =================
+	             history[hist_index++] = value;
+
+	             if (hist_index >= WINDOW_SIZE)
+	                 hist_index = 0;
+
+	             if (hist_count < WINDOW_SIZE)
+	                 hist_count++;
+
+	             float avg = 0;
+	             for (int i = 0; i < hist_count; i++)
+	                 avg += history[i];
+
+	             avg /= hist_count;
+
+	             // ================= STATE MACHINE =================
+	             if (current_state == 0) // DUST
+	             {
+	                 if (avg > SMOKE_THRESHOLD)
+	                 {
+	                     stable_counter++;
+	                     if (stable_counter > 2)
+	                     {
+	                         current_state = 1; // SMOKE
+	                         stable_counter = 0;
+	                     }
+	                 }
+	                 else
+	                 {
+	                     stable_counter = 0;
+	                 }
+	             }
+	             else // SMOKE
+	             {
+	                 if (avg < DUST_THRESHOLD)
+	                 {
+	                     stable_counter++;
+	                     if (stable_counter > 2)
+	                     {
+	                         current_state = 0; // DUST
+	                         stable_counter = 0;
+	                     }
+	                 }
+	                 else
+	                 {
+	                     stable_counter = 0;
+	                 }
+	             }
+	             // ================= BUZZER + SEND =================
+	             if (force_off == 1)
+	             {
+	                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+	                 sprintf(msg, "0\n");
+	             }
+	             else
+	             {
+	                 if (current_state == 1) // SMOKE
+	                 {
+	                     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+	                     sprintf(msggg, "1\n");
+	                 }
+	                 else
+	                 {
+	                     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+	                     sprintf(msggg, "0\n");
+	                 }
+	             }
+	             HAL_UART_Transmit(&huart1, (uint8_t*)msggg, strlen(msggg), HAL_MAX_DELAY);
+	             HAL_Delay(200);   */
