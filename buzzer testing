@@ -1,4 +1,22 @@
-     if (HAL_UART_Receive(&huart1, &rx_char, 1, 10) == HAL_OK)
+/*//buzzer
+uint16_t history[WINDOW_SIZE] = {0};
+int hist_index = 0;
+int hist_count = 0;
+
+char current_state = 0; // 0 = DUST, 1 = SMOKE
+int stable_counter = 0;
+
+int force_off = 0;
+
+// UART
+uint8_t rx_char;
+char rx_buffer[10];
+int rx_index = 0;
+char msggg[20];
+int value; */
+
+
+if (HAL_UART_Receive(&huart1, &rx_char, 1, 10) == HAL_OK)
 	          {
 	              if (rx_char == '\r') continue;
 
