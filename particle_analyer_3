@@ -1,0 +1,161 @@
+void calculate_particle_size(uint16_t blue_avg_1,uint16_t blue_avg_2, uint16_t ir_avg_1, uint16_t ir_avg_2)
+{
+
+    // ================= 2-LOOP SYSTEM =================
+    static uint8_t loop_state = 0;
+
+    static float pa6_blue_90 = 0, pa6_ir_90 = 0;
+    static float pa7_blue_120 = 0, pa7_ir_120 = 0;
+
+    pa6_blue_90=adc_to_voltage(blue_avg_1);
+    pa7_blue_120=adc_to_voltage(blue_avg_2);
+    pa6_ir_90=adc_to_voltage(ir_avg_1);
+    pa7_ir_120=adc_to_voltage(ir_avg_2);
+    // ================= ASSIGN =================
+    I_lambda1_b90 = pa6_blue_90;
+    I_lambda2_ir90 = pa6_ir_90;
+
+    I_forward_b90 = pa6_blue_90;
+    I_side_b120    = pa7_blue_120;
+
+
+    // ================= FILTER =================
+    I_lambda1_b90 = filter_signal(prev_lambda1, I_lambda1_b90);
+    I_lambda2_ir90 = filter_signal(prev_lambda2, I_lambda2_ir90);
+    I_forward_b90 = filter_signal(prev_forward, I_forward_b90);
+    I_side_b120    = filter_signal(prev_side, I_side_b120);
+
+    prev_lambda1 = I_lambda1_b90;
+    prev_lambda2 = I_lambda2_ir90;
+    prev_forward = I_forward_b90;
+    prev_side    = I_side_b120;
+
+
+    // ================= SAFETY =================
+    if(I_lambda2_ir90 <= 0.01f) I_lambda2_ir90 = 0.01f;
+    if(I_side_b120 <= 0.01f) I_side_b120 = 0.01f;
+
+    I_lambda1_b90 =I_side_b120;
+    I_side_b120 = 1;
+    I_forward_b90 =1;
+    I_lambda2_ir90=1;
+
+
+    // ================= RATIOS =================
+    R_lambda = I_lambda1_b90 / I_lambda2_ir90;
+    R_theta  = I_forward_b90 / I_side_b120;
+
+
+    // ================= REGRESSION =================
+    if(R_lambda < 1.2)
+    {
+        if(R_theta < 2.0)
+        {
+            d = 50 + 60*R_lambda + 25*R_theta
+              - 10*(R_lambda*R_lambda)
+              + 4*(R_theta*R_theta)
+              + 8*(R_lambda*R_theta);
+        }
+        else
+        {
+            d = 90 + 45*R_lambda + 28*R_theta
+              - 8*(R_lambda*R_lambda)
+              + 5*(R_theta*R_theta)
+              + 6*(R_lambda*R_theta);
+        }
+    }
+    else if(R_lambda < 1.5)
+    {
+        if(R_theta < 3.5)
+        {
+            d = 160 + 55*R_lambda + 22*R_theta
+              - 12*(R_lambda*R_lambda)
+              + 3*(R_theta*R_theta)
+              + 7*(R_lambda*R_theta);
+        }
+        else
+        {
+            d = 240 + 35*R_lambda + 18*R_theta
+              - 10*(R_lambda*R_lambda)
+              + 2*(R_theta*R_theta)
+              + 5*(R_lambda*R_theta);
+        }
+    }
+    else
+    {
+        if(R_theta < 5.0)
+        {
+            d = 320 + 28*R_lambda + 15*R_theta
+              - 8*(R_lambda*R_lambda)
+              + 2*(R_theta*R_theta)
+              + 4*(R_lambda*R_theta);
+        }
+        else
+        {
+            d = 420 + 20*R_lambda + 12*R_theta
+              - 6*(R_lambda*R_lambda)
+              + 1*(R_theta*R_theta)
+              + 3*(R_lambda*R_theta);
+        }
+    }
+
+    if(d < 0) d = 0;
+    if(d > 1000) d = 1000;
+
+
+    // ================= PSD =================
+    update_PSD(d);
+
+
+    // ================= BUZZER =================
+    uint8_t buzzer_status=0;
+
+
+    uint32_t max_val = particle_bins[0];
+    uint8_t max_index = 0;
+
+    for(int i = 1; i < NUM_BINS; i++)
+    {
+        if(particle_bins[i] > max_val)
+        {
+            max_val = particle_bins[i];
+            max_index = i;
+        }
+    }
+    if(force_buzzer_off == 1)
+    {
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+        buzzer_status = 0;
+    }
+    else if(max_index == 2)
+    {
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+        buzzer_status = 1;
+    }
+    else
+    {
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+        buzzer_status = 0;
+    }
+
+    // ================= UART =================
+    char which_smoke[10];
+
+    strcpy(which_smoke, "yayyyyy");
+
+
+    sprintf(msg,
+    "%.2f,%.2f,%.2f,%lu,%lu,%lu,%lu,%lu,%s,%d\r\n",
+    R_theta,
+    R_lambda,
+    d,
+    particle_bins[0],
+    particle_bins[1],
+    particle_bins[2],
+    particle_bins[3],
+    particle_bins[4],
+	which_smoke,
+    buzzer_status);
+
+    HAL_UART_Transmit(&huart1,(uint8_t*)msg, strlen(msg), 10);
+}
