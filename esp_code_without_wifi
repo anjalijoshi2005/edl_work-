@@ -1,0 +1,77 @@
+// ---------------- GLOBAL VARIABLES ----------------
+String stm_message = "";
+String temp = "";
+
+// ---------------- SETUP ----------------
+void setup()
+{
+  Serial.begin(115200);   // Excel (PLX-DAQ)
+  Serial2.begin(115200, SERIAL_8N1, 16, 17);  // STM32 UART (RX=16, TX=17)
+
+  delay(2000);
+
+  // 🔥 Initialize Excel
+  Serial.println("CLEARDATA");
+  Serial.println("LABEL,Time,P1,P2,P3,P4,P5,P6");
+}
+
+// ---------------- LOOP ----------------
+void loop()
+{
+  while (Serial2.available())
+  {
+    char c = Serial2.read();
+
+    if (c == '\n')   // full line received
+    {
+      stm_message = temp;
+
+      // Debug print (optional)
+      Serial.println(stm_message);
+
+      // Send to Excel
+      sendToExcel(stm_message);
+
+      temp = "";   // reset buffer
+    }
+    else if (c != '\r')   // ignore carriage return
+    {
+      temp += c;
+    }
+  }
+}
+
+// ---------------- FUNCTION: SEND TO EXCEL ----------------
+void sendToExcel(String data)
+{
+  // Expected format:
+  // v1,v2,v3,v4,v5,v6
+
+  int idx[5];
+  int start = 0;
+
+  // Find comma positions
+  for (int i = 0; i < 5; i++)
+  {
+    idx[i] = data.indexOf(',', start);
+    if (idx[i] == -1) return; // safety: wrong format
+    start = idx[i] + 1;
+  }
+
+  // Extract values
+  String v1 = data.substring(0, idx[0]);
+  String v2 = data.substring(idx[0] + 1, idx[1]);
+  String v3 = data.substring(idx[1] + 1, idx[2]);
+  String v4 = data.substring(idx[2] + 1, idx[3]);
+  String v5 = data.substring(idx[3] + 1, idx[4]);
+  String v6 = data.substring(idx[4] + 1);
+
+  // Send to Excel (PLX-DAQ format)
+  Serial.print("DATA,TIME,");
+  Serial.print(v1); Serial.print(",");
+  Serial.print(v2); Serial.print(",");
+  Serial.print(v3); Serial.print(",");
+  Serial.print(v4); Serial.print(",");
+  Serial.print(v5); Serial.print(",");
+  Serial.println(v6);
+}
